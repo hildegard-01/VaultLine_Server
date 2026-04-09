@@ -1,0 +1,31 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  workers: 1
+  debug: true
+
+database:
+  url: "sqlite:///./data/app.db"
+
+storage:
+  data_dir: "./data"
+  cache_dir: "./data/cache"
+  preview_max_size_mb: 5000
+  preview_max_age_days: 30
+
+auth:
+  jwt_secret: "vaultline-dev-secret-change-in-production"
+  jwt_algorithm: "HS256"
+  access_token_expire_hours: 8
+  refresh_token_expire_days: 30
+  password_min_length: 8
+  login_max_attempts: 5
+  login_lockout_minutes: 15
+
+sync:
+  heartbeat_timeout_seconds: 180
+  auto_sync_warning_hours: 48
+
+log_retention:
+  hot_months: 6
+  cold_months: 24
