@@ -139,8 +139,8 @@ def refresh_token(body: RefreshRequest, request: Request, db: DbSession = Depend
     if session is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 세션입니다.")
 
-    # 만료 확인
-    if session.expires_at < datetime.now(timezone.utc):
+    # 만료 확인 — SQLite는 naive datetime으로 저장하므로 UTC naive로 비교
+    if session.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
         db.delete(session)
         db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="세션이 만료되었습니다. 다시 로그인하세요.")

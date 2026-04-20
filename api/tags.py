@@ -71,25 +71,6 @@ def update_tag(
     return tag
 
 
-# ─── DELETE /tags/{tag_id} ───
-
-@router.delete("/{tag_id}")
-def delete_tag(
-    tag_id: int,
-    admin: User = Depends(require_admin),
-    db: DbSession = Depends(get_db),
-):
-    """태그 삭제 (관리자)"""
-    tag = db.query(Tag).filter(Tag.id == tag_id).first()
-    if tag is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="태그를 찾을 수 없습니다.")
-
-    name = tag.name
-    db.delete(tag)
-    db.commit()
-    return {"message": f"태그 '{name}'이(가) 삭제되었습니다."}
-
-
 # ─── GET /tags/file ───
 
 @router.get("/file", response_model=list[FileTagOut])
@@ -191,6 +172,25 @@ def detach_tag(
     db.commit()
 
     return {"message": "태그가 해제되었습니다."}
+
+
+# ─── DELETE /tags/{tag_id} — /detach 뒤에 등록해야 라우팅 충돌 방지 ───
+
+@router.delete("/{tag_id}")
+def delete_tag(
+    tag_id: int,
+    admin: User = Depends(require_admin),
+    db: DbSession = Depends(get_db),
+):
+    """태그 삭제 (관리자)"""
+    tag = db.query(Tag).filter(Tag.id == tag_id).first()
+    if tag is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="태그를 찾을 수 없습니다.")
+
+    name = tag.name
+    db.delete(tag)
+    db.commit()
+    return {"message": f"태그 '{name}'이(가) 삭제되었습니다."}
 
 
 # ─── GET /tags/search ───

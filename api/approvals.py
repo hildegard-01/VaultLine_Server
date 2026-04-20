@@ -38,6 +38,37 @@ def _build_approval_out(a: Approval, db: DbSession) -> ApprovalOut:
     )
 
 
+# ─── 승인 규칙 (관리자) — /{approval_id} 보다 먼저 등록해야 라우팅 충돌 방지 ───
+
+@router.get("/rules", response_model=list[ApprovalRuleOut])
+def list_rules(admin: User = Depends(require_admin), db: DbSession = Depends(get_db)):
+    return db.query(ApprovalRule).order_by(ApprovalRule.created_at.desc()).all()
+
+
+@router.post("/rules", response_model=ApprovalRuleOut, status_code=201)
+def create_rule(body: ApprovalRuleCreate, admin: User = Depends(require_admin), db: DbSession = Depends(get_db)):
+    rule = ApprovalRule(
+        repo_id=body.repo_id, path_pattern=body.path_pattern,
+        required_reviewers=body.required_reviewers,
+        auto_assign_user_ids=json.dumps(body.auto_assign_user_ids) if body.auto_assign_user_ids else None,
+        created_by=admin.id,
+    )
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+    return rule
+
+
+@router.delete("/rules/{rule_id}")
+def delete_rule(rule_id: int, admin: User = Depends(require_admin), db: DbSession = Depends(get_db)):
+    rule = db.query(ApprovalRule).filter(ApprovalRule.id == rule_id).first()
+    if not rule:
+        raise HTTPException(status_code=404, detail="규칙을 찾을 수 없습니다.")
+    db.delete(rule)
+    db.commit()
+    return {"message": "승인 규칙이 삭제되었습니다."}
+
+
 # ─── GET /approvals ───
 
 @router.get("", response_model=ApprovalListOut)
@@ -191,32 +222,3 @@ async def reject(
     return _build_approval_out(approval, db)
 
 
-# ─── 승인 규칙 (관리자) ───
-
-@router.get("/rules", response_model=list[ApprovalRuleOut])
-def list_rules(admin: User = Depends(require_admin), db: DbSession = Depends(get_db)):
-    return db.query(ApprovalRule).order_by(ApprovalRule.created_at.desc()).all()
-
-
-@router.post("/rules", response_model=ApprovalRuleOut, status_code=201)
-def create_rule(body: ApprovalRuleCreate, admin: User = Depends(require_admin), db: DbSession = Depends(get_db)):
-    rule = ApprovalRule(
-        repo_id=body.repo_id, path_pattern=body.path_pattern,
-        required_reviewers=body.required_reviewers,
-        auto_assign_user_ids=json.dumps(body.auto_assign_user_ids) if body.auto_assign_user_ids else None,
-        created_by=admin.id,
-    )
-    db.add(rule)
-    db.commit()
-    db.refresh(rule)
-    return rule
-
-
-@router.delete("/rules/{rule_id}")
-def delete_rule(rule_id: int, admin: User = Depends(require_admin), db: DbSession = Depends(get_db)):
-    rule = db.query(ApprovalRule).filter(ApprovalRule.id == rule_id).first()
-    if not rule:
-        raise HTTPException(status_code=404, detail="규칙을 찾을 수 없습니다.")
-    db.delete(rule)
-    db.commit()
-    return {"message": "승인 규칙이 삭제되었습니다."}
