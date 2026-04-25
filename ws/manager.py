@@ -214,6 +214,19 @@ class ConnectionManager:
                 "data": data,
             })
 
+        elif msg_type == "svn_owner_ready":
+            # 소유자: svnserve TCP 연결 성공 → 수신자에게 전달
+            session_id = msg.get("session_id")
+            if not session_id:
+                return
+            session = self._svn_sessions.get(session_id)
+            if not session:
+                return
+            await self.send_to_user(session["recipient_user_id"], {
+                "type": "svn_owner_ready",
+                "session_id": session_id,
+            })
+
         elif msg_type == "svn_close":
             # 세션 종료 중계
             session_id = msg.get("session_id")
