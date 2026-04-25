@@ -253,6 +253,9 @@ class Share(Base):
     download_count = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    svnserve_url = Column(String(200), nullable=True)
+    svn_username = Column(String(100), nullable=True)
+    svn_password_plain = Column(String(200), nullable=True)
 
     recipients = relationship("ShareRecipient", back_populates="share", cascade="all, delete-orphan")
 

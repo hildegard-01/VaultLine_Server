@@ -41,6 +41,9 @@ def _build_share_out(share: Share, db: DbSession) -> ShareOut:
         expires_at=share.expires_at, max_downloads=share.max_downloads,
         download_count=share.download_count, is_active=share.is_active,
         recipients=recipients, created_at=share.created_at,
+        svnserve_url=share.svnserve_url,
+        svn_username=share.svn_username,
+        svn_password_plain=share.svn_password_plain,
     )
 
 
@@ -118,6 +121,9 @@ async def create_share(
         created_by=current_user.id, permission=body.permission,
         password_hash=hash_password(body.password) if body.password else None,
         expires_at=body.expires_at, max_downloads=body.max_downloads,
+        svnserve_url=body.svnserve_url,
+        svn_username=body.svn_username,
+        svn_password_plain=body.svn_password_plain,
     )
     db.add(share)
     db.flush()
@@ -167,13 +173,21 @@ def update_share(
 
 
 @router.delete("/{share_id}")
-def delete_share(share_id: int, current_user: User = Depends(get_current_user), db: DbSession = Depends(get_db)):
-    """공유 삭제"""
+async def delete_share(share_id: int, current_user: User = Depends(get_current_user), db: DbSession = Depends(get_db)):
+    """공유 삭제 — 수신자에게 WS 알림 전송"""
     share = db.query(Share).filter(Share.id == share_id, Share.created_by == current_user.id).first()
     if not share:
         raise HTTPException(status_code=404, detail="공유를 찾을 수 없습니다.")
+    # 수신자 목록 저장 (삭제 전)
+    recipient_ids = [r.user_id for r in share.recipients]
     db.delete(share)
     db.commit()
+    # 수신자에게 공유 취소 알림
+    for uid in recipient_ids:
+        await manager.send_to_user(uid, {
+            "type": "share_revoked",
+            "data": {"share_id": share_id},
+        })
     return {"message": "공유가 삭제되었습니다."}
 
 
@@ -213,7 +227,19 @@ async def accept_share(
         })
 
     db.commit()
-    return {"message": "공유를 수락했습니다.", "status": "accepted"}
+    creator = db.query(User).filter(User.id == share.created_by).first()
+    return {
+        "message": "공유를 수락했습니다.",
+        "status": "accepted",
+        "svnserve_url": share.svnserve_url,
+        "svn_username": share.svn_username,
+        "svn_password_plain": share.svn_password_plain,
+        "permission": share.permission,
+        "file_path": share.file_path,
+        "repo_id": share.repo_id,
+        "share_id": share.id,
+        "creator_name": creator.display_name if creator else None,
+    }
 
 
 @router.post("/{share_id}/reject")

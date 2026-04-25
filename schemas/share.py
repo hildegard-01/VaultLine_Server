@@ -13,6 +13,9 @@ class ShareCreate(BaseModel):
     expires_at: datetime | None = None
     max_downloads: int | None = None
     recipient_user_ids: list[int] = []
+    svnserve_url: str | None = None
+    svn_username: str | None = None
+    svn_password_plain: str | None = None
 
 
 class ShareUpdate(BaseModel):
@@ -45,6 +48,9 @@ class ShareOut(BaseModel):
     is_active: bool
     recipients: list[RecipientOut] = []
     created_at: datetime
+    svnserve_url: str | None = None
+    svn_username: str | None = None
+    svn_password_plain: str | None = None
 
 
 class ShareListOut(BaseModel):
