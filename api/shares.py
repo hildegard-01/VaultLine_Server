@@ -255,8 +255,8 @@ async def reject_share(
     ).first()
     if not recipient:
         raise HTTPException(status_code=404, detail="공유를 찾을 수 없습니다.")
-    if recipient.status != "pending":
-        raise HTTPException(status_code=400, detail=f"이미 '{recipient.status}' 상태입니다.")
+    if recipient.status == "rejected":
+        raise HTTPException(status_code=400, detail="이미 거절한 공유입니다.")
 
     recipient.status = "rejected"
     recipient.responded_at = datetime.now(timezone.utc)

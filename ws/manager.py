@@ -227,6 +227,20 @@ class ConnectionManager:
                 "session_id": session_id,
             })
 
+        elif msg_type == "svn_relay_error":
+            # 소유자: 오류 이유 → 수신자에게 전달
+            session_id = msg.get("session_id")
+            if not session_id:
+                return
+            session = self._svn_sessions.get(session_id)
+            if not session:
+                return
+            await self.send_to_user(session["recipient_user_id"], {
+                "type": "svn_relay_error",
+                "session_id": session_id,
+                "error": msg.get("error", "소유자 측 오류"),
+            })
+
         elif msg_type == "svn_close":
             # 세션 종료 중계
             session_id = msg.get("session_id")
