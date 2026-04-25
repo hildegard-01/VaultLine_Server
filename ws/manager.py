@@ -22,6 +22,10 @@ class ConnectionManager:
         self._connections: dict[int, list[WebSocket]] = {}
         # 파일 요청 대기 큐: req_id → asyncio.Future
         self._file_requests: dict[str, asyncio.Future] = {}
+        # SVN 프록시: session_id → {owner_user_id, recipient_user_id, share_id}
+        self._svn_sessions: dict[str, dict] = {}
+        # share_id → owner_user_id (provider 등록 테이블)
+        self._share_providers: dict[int, int] = {}
 
     async def connect(self, ws: WebSocket, user_id: int) -> None:
         """WebSocket 연결 등록"""
@@ -36,6 +40,9 @@ class ConnectionManager:
             self._connections[user_id] = [c for c in self._connections[user_id] if c is not ws]
             if not self._connections[user_id]:
                 del self._connections[user_id]
+        # SVN provider 등록 해제
+        for sid in [k for k, v in self._share_providers.items() if v == user_id]:
+            del self._share_providers[sid]
 
     def is_user_connected(self, user_id: int) -> bool:
         """사용자 WebSocket 연결 여부"""
@@ -136,6 +143,94 @@ class ConnectionManager:
         elif msg_type == "preview_push":
             # 미리보기 캐시 저장 (Week 4에서 구현)
             pass
+
+        # ── SVN 프록시 메시지 ──
+
+        elif msg_type == "svn_register_provider":
+            # 소유자: 담당 share_id 목록 등록
+            share_ids = msg.get("share_ids", [])
+            # 기존 등록 제거
+            for sid in [k for k, v in self._share_providers.items() if v == user_id]:
+                del self._share_providers[sid]
+            for sid in share_ids:
+                self._share_providers[int(sid)] = user_id
+
+        elif msg_type == "svn_new_session":
+            # 수신자: 새 SVN 세션 요청
+            session_id = msg.get("session_id")
+            share_id = int(msg.get("share_id", 0))
+            if not session_id or not share_id:
+                return
+
+            owner_user_id = self._share_providers.get(share_id)
+            if not owner_user_id:
+                # DB 조회 fallback
+                from db.models import Share
+                from db.database import SessionLocal
+                db = SessionLocal()
+                try:
+                    share = db.query(Share).filter(Share.id == share_id).first()
+                    if share:
+                        owner_user_id = share.created_by
+                finally:
+                    db.close()
+
+            if not owner_user_id or not self.is_user_connected(owner_user_id):
+                await self.send_to_user(user_id, {
+                    "type": "svn_error",
+                    "session_id": session_id,
+                    "error": "소유자가 오프라인 상태입니다. 잠시 후 다시 시도해 주세요.",
+                })
+                return
+
+            self._svn_sessions[session_id] = {
+                "owner_user_id": owner_user_id,
+                "recipient_user_id": user_id,
+                "share_id": share_id,
+            }
+            await self.send_to_user(owner_user_id, {
+                "type": "svn_connect",
+                "session_id": session_id,
+                "share_id": share_id,
+            })
+
+        elif msg_type == "svn_data":
+            # 양방향 데이터 중계
+            session_id = msg.get("session_id")
+            data = msg.get("data")
+            if not session_id or data is None:
+                return
+            session = self._svn_sessions.get(session_id)
+            if not session:
+                return
+            target_id = (
+                session["recipient_user_id"]
+                if user_id == session["owner_user_id"]
+                else session["owner_user_id"]
+            )
+            await self.send_to_user(target_id, {
+                "type": "svn_data",
+                "session_id": session_id,
+                "data": data,
+            })
+
+        elif msg_type == "svn_close":
+            # 세션 종료 중계
+            session_id = msg.get("session_id")
+            if not session_id:
+                return
+            session = self._svn_sessions.pop(session_id, None)
+            if not session:
+                return
+            target_id = (
+                session["recipient_user_id"]
+                if user_id == session["owner_user_id"]
+                else session["owner_user_id"]
+            )
+            await self.send_to_user(target_id, {
+                "type": "svn_close",
+                "session_id": session_id,
+            })
 
 
 # 전역 싱글턴
