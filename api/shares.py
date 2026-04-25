@@ -150,6 +150,25 @@ async def create_share(
     return _build_share_out(share, db)
 
 
+@router.get("/{share_id}/credentials")
+def get_share_credentials(
+    share_id: int,
+    current_user: User = Depends(get_current_user),
+    db: DbSession = Depends(get_db),
+):
+    """소유자 전용 — SVN 접속 정보 조회 (server_share_id 복구용)"""
+    share = db.query(Share).filter(
+        Share.id == share_id,
+        Share.created_by == current_user.id,
+    ).first()
+    if not share:
+        raise HTTPException(status_code=404, detail="공유를 찾을 수 없습니다.")
+    return {
+        "id": share.id,
+        "svn_username": share.svn_username,
+    }
+
+
 @router.put("/{share_id}", response_model=ShareOut)
 def update_share(
     share_id: int, body: ShareUpdate,
@@ -189,6 +208,27 @@ async def delete_share(share_id: int, current_user: User = Depends(get_current_u
             "data": {"share_id": share_id},
         })
     return {"message": "공유가 삭제되었습니다."}
+
+
+@router.post("/{share_id}/undo-accept")
+async def undo_accept_share(
+    share_id: int,
+    current_user: User = Depends(get_current_user),
+    db: DbSession = Depends(get_db),
+):
+    """수락 롤백 — SVN 연결 실패 시 pending으로 복원 (거절 알림 없음)"""
+    recipient = db.query(ShareRecipient).filter(
+        ShareRecipient.share_id == share_id,
+        ShareRecipient.user_id == current_user.id,
+    ).first()
+    if not recipient:
+        raise HTTPException(status_code=404, detail="공유를 찾을 수 없습니다.")
+    if recipient.status not in ("accepted", "pending"):
+        raise HTTPException(status_code=400, detail=f"'{recipient.status}' 상태는 되돌릴 수 없습니다.")
+    recipient.status = "pending"
+    recipient.responded_at = None
+    db.commit()
+    return {"status": "pending"}
 
 
 @router.post("/{share_id}/accept")
