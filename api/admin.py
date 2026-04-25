@@ -7,14 +7,14 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy import func
 
 from db.database import get_db
 from db.models import (
     User, RepoRegistry, CommitLog, ActivityLog, Approval,
-    Share, Notification, PreviewCacheMeta, Session,
+    Share, ShareRecipient, Notification, PreviewCacheMeta, Session,
 )
 from api.deps import require_admin
 from config import get_settings
@@ -126,3 +126,87 @@ def force_logout(user_id: int, admin: User = Depends(require_admin), db: DbSessi
     db.commit()
 
     return {"message": f"{user.username}의 세션 {deleted}개가 삭제되었습니다."}
+
+
+# ─── GET /admin/shares ───
+
+@router.get("/shares")
+def admin_list_shares(
+    skip: int = 0,
+    limit: int = 100,
+    admin: User = Depends(require_admin),
+    db: DbSession = Depends(get_db),
+):
+    """전체 공유 목록 조회 (관리자 전용)"""
+    shares = (
+        db.query(Share)
+        .order_by(Share.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    total = db.query(func.count(Share.id)).scalar() or 0
+
+    items = []
+    for s in shares:
+        creator = db.query(User).filter(User.id == s.created_by).first()
+        repo = db.query(RepoRegistry).filter(RepoRegistry.id == s.repo_id).first()
+        recipients = (
+            db.query(ShareRecipient, User)
+            .join(User, User.id == ShareRecipient.user_id)
+            .filter(ShareRecipient.share_id == s.id)
+            .all()
+        )
+        items.append({
+            "id": s.id,
+            "repo_id": s.repo_id,
+            "repo_name": repo.name if repo else None,
+            "file_path": s.file_path,
+            "share_token": s.share_token,
+            "created_by": s.created_by,
+            "creator_name": creator.display_name or creator.username if creator else None,
+            "creator_username": creator.username if creator else None,
+            "permission": s.permission,
+            "has_password": s.password_hash is not None,
+            "expires_at": s.expires_at.isoformat() if s.expires_at else None,
+            "max_downloads": s.max_downloads,
+            "download_count": s.download_count,
+            "is_active": s.is_active,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "recipients": [
+                {
+                    "user_id": u.id,
+                    "username": u.username,
+                    "display_name": u.display_name,
+                    "accessed_at": r.accessed_at.isoformat() if r.accessed_at else None,
+                }
+                for r, u in recipients
+            ],
+        })
+
+    return {"items": items, "total": total}
+
+
+# ─── DELETE /admin/shares/{share_id} ───
+
+@router.delete("/shares/{share_id}")
+def admin_delete_share(
+    share_id: int,
+    admin: User = Depends(require_admin),
+    db: DbSession = Depends(get_db),
+):
+    """공유 강제 삭제 (관리자 전용 — 소유자 무관)"""
+    share = db.query(Share).filter(Share.id == share_id).first()
+    if not share:
+        raise HTTPException(status_code=404, detail="공유를 찾을 수 없습니다.")
+
+    db.query(ShareRecipient).filter(ShareRecipient.share_id == share_id).delete()
+    db.delete(share)
+    db.add(ActivityLog(
+        user_id=admin.id,
+        action="admin.share-delete",
+        detail=f"공유 #{share_id} 강제 삭제",
+    ))
+    db.commit()
+
+    return {"message": f"공유 #{share_id}이(가) 삭제되었습니다."}
