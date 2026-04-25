@@ -264,7 +264,9 @@ class ShareRecipient(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     share_id = Column(Integer, ForeignKey("shares.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(20), default="pending")  # pending / accepted / rejected
     accessed_at = Column(DateTime, nullable=True)
+    responded_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("share_id", "user_id", name="uq_share_recipient"),

@@ -25,7 +25,9 @@ class ShareUpdate(BaseModel):
 class RecipientOut(BaseModel):
     user_id: int
     username: str | None = None
+    status: str = "pending"
     accessed_at: datetime | None = None
+    responded_at: datetime | None = None
 
 
 class ShareOut(BaseModel):
@@ -47,4 +49,26 @@ class ShareOut(BaseModel):
 
 class ShareListOut(BaseModel):
     items: list[ShareOut]
+    total: int
+
+
+class ShareReceivedOut(BaseModel):
+    """공유받은 항목 — 수신자 관점"""
+    id: int
+    repo_id: int
+    file_path: str | None
+    share_token: str
+    created_by: int
+    creator_name: str | None = None
+    permission: str
+    has_password: bool = False
+    expires_at: datetime | None
+    is_active: bool
+    created_at: datetime
+    my_status: str  # pending / accepted / rejected
+    responded_at: datetime | None = None
+
+
+class ShareReceivedListOut(BaseModel):
+    items: list[ShareReceivedOut]
     total: int

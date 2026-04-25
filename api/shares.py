@@ -9,7 +9,10 @@ from sqlalchemy.orm import Session as DbSession
 
 from db.database import get_db
 from db.models import Share, ShareRecipient, User, Notification, ActivityLog
-from schemas.share import ShareCreate, ShareUpdate, ShareOut, ShareListOut, RecipientOut
+from schemas.share import (
+    ShareCreate, ShareUpdate, ShareOut, ShareListOut, RecipientOut,
+    ShareReceivedOut, ShareReceivedListOut,
+)
 from utils.security import hash_password, verify_password
 from api.deps import get_current_user
 from ws.manager import manager
@@ -25,7 +28,9 @@ def _build_share_out(share: Share, db: DbSession) -> ShareOut:
         recipients.append(RecipientOut(
             user_id=r.user_id,
             username=user.username if user else None,
+            status=r.status,
             accessed_at=r.accessed_at,
+            responded_at=r.responded_at,
         ))
     return ShareOut(
         id=share.id, repo_id=share.repo_id, file_path=share.file_path,
@@ -49,6 +54,48 @@ def list_shares(
     total = query.count()
     shares = query.order_by(Share.created_at.desc()).offset(skip).limit(limit).all()
     return ShareListOut(items=[_build_share_out(s, db) for s in shares], total=total)
+
+
+@router.get("/received", response_model=ShareReceivedListOut)
+def list_received_shares(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    status: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: DbSession = Depends(get_db),
+):
+    """나에게 공유된 목록 — 수락 대기 / 수락 / 거절 상태별 조회 가능"""
+    query = db.query(ShareRecipient).filter(ShareRecipient.user_id == current_user.id)
+
+    if status and status in ("pending", "accepted", "rejected"):
+        query = query.filter(ShareRecipient.status == status)
+
+    total = query.count()
+    recipients = query.offset(skip).limit(limit).all()
+
+    items = []
+    for r in recipients:
+        share = db.query(Share).filter(Share.id == r.share_id).first()
+        if not share:
+            continue
+        creator = db.query(User).filter(User.id == share.created_by).first()
+        items.append(ShareReceivedOut(
+            id=share.id,
+            repo_id=share.repo_id,
+            file_path=share.file_path,
+            share_token=share.share_token,
+            created_by=share.created_by,
+            creator_name=creator.display_name if creator else None,
+            permission=share.permission,
+            has_password=share.password_hash is not None,
+            expires_at=share.expires_at,
+            is_active=share.is_active,
+            created_at=share.created_at,
+            my_status=r.status,
+            responded_at=r.responded_at,
+        ))
+
+    return ShareReceivedListOut(items=items, total=total)
 
 
 @router.get("/{share_id}", response_model=ShareOut)
@@ -128,6 +175,83 @@ def delete_share(share_id: int, current_user: User = Depends(get_current_user), 
     db.delete(share)
     db.commit()
     return {"message": "공유가 삭제되었습니다."}
+
+
+@router.post("/{share_id}/accept")
+async def accept_share(
+    share_id: int,
+    current_user: User = Depends(get_current_user),
+    db: DbSession = Depends(get_db),
+):
+    """공유 수락"""
+    recipient = db.query(ShareRecipient).filter(
+        ShareRecipient.share_id == share_id,
+        ShareRecipient.user_id == current_user.id,
+    ).first()
+    if not recipient:
+        raise HTTPException(status_code=404, detail="공유를 찾을 수 없습니다.")
+    if recipient.status != "pending":
+        raise HTTPException(status_code=400, detail=f"이미 '{recipient.status}' 상태입니다.")
+
+    recipient.status = "accepted"
+    recipient.responded_at = datetime.now(timezone.utc)
+
+    # 공유 생성자에게 알림
+    share = db.query(Share).filter(Share.id == share_id).first()
+    if share:
+        notif = Notification(
+            user_id=share.created_by,
+            kind="share",
+            title=f"{current_user.display_name or current_user.username}님이 공유를 수락했습니다",
+            message=share.file_path or "저장소 전체",
+            link=f"/shares/{share_id}",
+        )
+        db.add(notif)
+        await manager.send_to_user(share.created_by, {
+            "type": "notification",
+            "data": {"kind": "share_accepted", "message": notif.title, "link": notif.link},
+        })
+
+    db.commit()
+    return {"message": "공유를 수락했습니다.", "status": "accepted"}
+
+
+@router.post("/{share_id}/reject")
+async def reject_share(
+    share_id: int,
+    current_user: User = Depends(get_current_user),
+    db: DbSession = Depends(get_db),
+):
+    """공유 거절"""
+    recipient = db.query(ShareRecipient).filter(
+        ShareRecipient.share_id == share_id,
+        ShareRecipient.user_id == current_user.id,
+    ).first()
+    if not recipient:
+        raise HTTPException(status_code=404, detail="공유를 찾을 수 없습니다.")
+    if recipient.status != "pending":
+        raise HTTPException(status_code=400, detail=f"이미 '{recipient.status}' 상태입니다.")
+
+    recipient.status = "rejected"
+    recipient.responded_at = datetime.now(timezone.utc)
+
+    share = db.query(Share).filter(Share.id == share_id).first()
+    if share:
+        notif = Notification(
+            user_id=share.created_by,
+            kind="share",
+            title=f"{current_user.display_name or current_user.username}님이 공유를 거절했습니다",
+            message=share.file_path or "저장소 전체",
+            link=f"/shares/{share_id}",
+        )
+        db.add(notif)
+        await manager.send_to_user(share.created_by, {
+            "type": "notification",
+            "data": {"kind": "share_rejected", "message": notif.title, "link": notif.link},
+        })
+
+    db.commit()
+    return {"message": "공유를 거절했습니다.", "status": "rejected"}
 
 
 @router.get("/public/{share_token}", response_model=ShareOut)
