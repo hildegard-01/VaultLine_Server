@@ -191,22 +191,74 @@ def update_share(
     return _build_share_out(share, db)
 
 
+@router.delete("/{share_id}/recipient", status_code=200)
+async def leave_share(
+    share_id: int,
+    current_user: User = Depends(get_current_user),
+    db: DbSession = Depends(get_db),
+):
+    """공유 해제 (수신자 측) — ShareRecipient 레코드 삭제 후 공유자에게 알림"""
+    recipient = db.query(ShareRecipient).filter(
+        ShareRecipient.share_id == share_id,
+        ShareRecipient.user_id == current_user.id,
+    ).first()
+    if not recipient:
+        raise HTTPException(status_code=404, detail="공유를 찾을 수 없습니다.")
+
+    share = db.query(Share).filter(Share.id == share_id).first()
+    db.delete(recipient)
+
+    if share:
+        notif = Notification(
+            user_id=share.created_by,
+            kind="share",
+            title=f"{current_user.display_name or current_user.username}님이 공유를 해제했습니다",
+            message=share.file_path or "저장소 전체",
+            link=f"/shares/{share_id}",
+        )
+        db.add(notif)
+        db.commit()
+        await manager.send_to_user(share.created_by, {
+            "type": "share_left",
+            "data": {
+                "share_id": share_id,
+                "user_id": current_user.id,
+                "username": current_user.display_name or current_user.username,
+            },
+        })
+    else:
+        db.commit()
+
+    return {"message": "공유를 해제했습니다."}
+
+
 @router.delete("/{share_id}")
 async def delete_share(share_id: int, current_user: User = Depends(get_current_user), db: DbSession = Depends(get_db)):
-    """공유 삭제 — 수신자에게 WS 알림 전송"""
+    """공유 삭제 — 수락된 수신자에게 WS 알림 + DB 알림 전송"""
     share = db.query(Share).filter(Share.id == share_id, Share.created_by == current_user.id).first()
     if not share:
         raise HTTPException(status_code=404, detail="공유를 찾을 수 없습니다.")
-    # 수신자 목록 저장 (삭제 전)
-    recipient_ids = [r.user_id for r in share.recipients]
+    # 삭제 전 수락된 수신자 목록 저장
+    accepted_ids = [r.user_id for r in share.recipients if r.status == "accepted"]
+    share_file = share.file_path or "저장소 전체"
+    sharer_name = current_user.display_name or current_user.username
     db.delete(share)
     db.commit()
-    # 수신자에게 공유 취소 알림
-    for uid in recipient_ids:
+    # 수락된 수신자에게 공유 취소 알림 (WS + DB)
+    for uid in accepted_ids:
+        notif = Notification(
+            user_id=uid, kind="share",
+            title=f"{sharer_name}님이 공유를 취소했습니다",
+            message=share_file,
+            link=None,
+        )
+        db.add(notif)
         await manager.send_to_user(uid, {
             "type": "share_revoked",
             "data": {"share_id": share_id},
         })
+    if accepted_ids:
+        db.commit()
     return {"message": "공유가 삭제되었습니다."}
 
 

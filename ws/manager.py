@@ -152,8 +152,20 @@ class ConnectionManager:
             # 기존 등록 제거
             for sid in [k for k, v in self._share_providers.items() if v == user_id]:
                 del self._share_providers[sid]
-            for sid in share_ids:
-                self._share_providers[int(sid)] = user_id
+            # created_by 검증 — 타인 소유 share 탈취 방지
+            from db.models import Share
+            from db.database import SessionLocal
+            db = SessionLocal()
+            try:
+                for sid in share_ids:
+                    share = db.query(Share).filter(
+                        Share.id == int(sid),
+                        Share.created_by == user_id,
+                    ).first()
+                    if share:
+                        self._share_providers[int(sid)] = user_id
+            finally:
+                db.close()
 
         elif msg_type == "svn_new_session":
             # 수신자: 새 SVN 세션 요청
